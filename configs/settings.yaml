@@ -1,0 +1,45 @@
+# UI Capture Agent Configuration
+
+# Vision Agent Settings (Qwen3-VL via Ollama)
+vision:
+  model: "qwen3-vl:8b"
+  endpoint: "http://localhost:11434/api/chat"  # Use /api/chat for vision models (supports images better)
+  timeout: 180  # Vision models with images need more time (3 minutes)
+  retry_attempts: 2
+  retry_delay: 5  # seconds between retries
+
+# Reasoning Agent Settings (Cloud LLM via Ollama)
+reasoning:
+  model: "gpt-oss:20b-cloud"
+  endpoint: "http://localhost:11434/api/generate"
+  timeout: 60
+
+# Web Agent Settings (Playwright)
+web:
+  browser: "chromium"
+  headless: false
+  viewport:
+    width: 1920
+    height: 1080
+  timeout: 60000
+  screenshot_path: "data"
+
+# Task Defaults
+task:
+  max_steps: 50
+  wait_timeout: 5000
+  retry_attempts: 3
+  manual_intervention:
+    enabled: true  # Allow manual intervention during execution
+    wait_on_fill: true  # Pause when filling email/password fields
+    wait_time: 30  # Seconds to wait for manual input
+
+# Credentials (for local deployment only)
+
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/ui_capture_agent.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+

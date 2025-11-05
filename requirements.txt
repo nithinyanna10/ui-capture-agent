@@ -1,0 +1,14 @@
+# UI Capture Agent Dependencies
+
+# Web automation
+playwright>=1.40.0
+
+# HTTP requests for Ollama API
+requests>=2.31.0
+
+# Configuration
+pyyaml>=6.0
+
+# Image processing (if needed)
+Pillow>=10.0.0
+
