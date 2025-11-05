@@ -1,7 +1,7 @@
 """Web agent using Playwright for browser automation."""
 import asyncio
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from utils.dom_extractor import extract_dom_tree, extract_interactive_elements, extract_form_fields
 from utils.logger import setup_logger
@@ -145,6 +145,52 @@ class WebAgent:
             self.logger.warning(f"Error capturing focused area: {e}, falling back to viewport")
             return await self.capture_screenshot(filepath, full_page=False)
     
+    async def capture_sidebar_regions(self, base_path: str) -> Dict[str, str]:
+        """
+        Capture focused screenshots of different page regions (left sidebar, header, main content).
+        Useful for complex pages where elements might be missed.
+        
+        Args:
+            base_path: Base path for screenshots (e.g., "data/task/step_00")
+        
+        Returns:
+            Dictionary with region names and their screenshot paths
+        """
+        if not self.page:
+            raise RuntimeError("Browser not started. Call start() first.")
+        
+        regions = {}
+        base = Path(base_path)
+        
+        # Common selectors for different regions
+        region_selectors = {
+            "left_sidebar": "aside, [role='complementary'], .sidebar, nav[aria-label*='sidebar']",
+            "header": "header, nav, [role='banner'], .header, .navbar",
+            "main_content": "main, [role='main'], .main-content, #main-content",
+            "right_sidebar": "aside:last-of-type, .right-sidebar"
+        }
+        
+        for region_name, selector in region_selectors.items():
+            try:
+                # Try multiple selectors
+                selectors = selector.split(", ")
+                element = None
+                for sel in selectors:
+                    element = await self.page.query_selector(sel.strip())
+                    if element:
+                        break
+                
+                if element:
+                    region_path = base.parent / f"{base.stem}_{region_name}{base.suffix}"
+                    await element.screenshot(path=str(region_path))
+                    regions[region_name] = str(region_path)
+                    self.logger.debug(f"Captured {region_name} region: {region_path}")
+            except Exception as e:
+                self.logger.debug(f"Could not capture {region_name} region: {e}")
+                continue
+        
+        return regions
+    
     async def get_dom_tree(self) -> Dict[str, Any]:
         """
         Extract DOM tree from current page.
@@ -181,7 +227,7 @@ class WebAgent:
         
         return await extract_form_fields(self.page)
     
-    async def click(self, text: Optional[str] = None, selector: Optional[str] = None, timeout: Optional[int] = None) -> None:
+    async def click(self, text: Optional[str] = None, selector: Optional[str] = None, timeout: Optional[int] = None, wait_for_navigation: bool = False) -> bool:
         """
         Click an element by text or selector with multiple fallback strategies.
         
@@ -189,11 +235,23 @@ class WebAgent:
             text: Text content to click
             selector: CSS selector to click
             timeout: Timeout in milliseconds (uses default if None)
+            wait_for_navigation: If True, wait for navigation after click (for submit buttons)
+        
+        Returns:
+            True if navigation occurred (when wait_for_navigation=True), False otherwise
         """
         if not self.page:
             raise RuntimeError("Browser not started. Call start() first.")
         
         timeout = timeout or self.timeout
+        
+        # Check if this looks like a submit/login button
+        is_submit_button = False
+        if text:
+            submit_keywords = ["sign in", "login", "submit", "continue", "create", "save", "next"]
+            is_submit_button = any(keyword in text.lower() for keyword in submit_keywords)
+        if wait_for_navigation or is_submit_button:
+            wait_for_navigation = True
         
         if text:
             # Try multiple strategies to find and click the element
@@ -212,10 +270,23 @@ class WebAgent:
             
             for strategy in strategies:
                 try:
-                    await self.page.click(strategy, timeout=timeout)
-                    self.logger.info(f"Clicked element with text '{text}' using strategy: {strategy}")
-                    clicked = True
-                    break
+                    if wait_for_navigation:
+                        # Get current URL before clicking
+                        url_before = self.page.url
+                        # Click and wait for navigation
+                        async with self.page.expect_navigation(timeout=timeout) as navigation_info:
+                            await self.page.click(strategy, timeout=timeout)
+                        await navigation_info.value
+                        url_after = self.page.url
+                        self.logger.info(f"Clicked element with text '{text}' using strategy: {strategy}")
+                        self.logger.info(f"Navigation occurred: {url_before} -> {url_after}")
+                        clicked = True
+                        return True
+                    else:
+                        await self.page.click(strategy, timeout=timeout)
+                        self.logger.info(f"Clicked element with text '{text}' using strategy: {strategy}")
+                        clicked = True
+                        break
                 except Exception as e:
                     last_error = e
                     self.logger.debug(f"Strategy '{strategy}' failed: {e}")
@@ -224,10 +295,19 @@ class WebAgent:
             if not clicked:
                 # Try to find similar text (case-insensitive, partial match)
                 try:
-                    # Use more flexible matching
-                    await self.page.click(f"text=/{text}/i", timeout=timeout)
-                    self.logger.info(f"Clicked element with text '{text}' using case-insensitive match")
-                    clicked = True
+                    if wait_for_navigation:
+                        url_before = self.page.url
+                        async with self.page.expect_navigation(timeout=timeout) as navigation_info:
+                            await self.page.click(f"text=/{text}/i", timeout=timeout)
+                        await navigation_info.value
+                        url_after = self.page.url
+                        self.logger.info(f"Clicked element with text '{text}' using case-insensitive match")
+                        self.logger.info(f"Navigation occurred: {url_before} -> {url_after}")
+                        return True
+                    else:
+                        await self.page.click(f"text=/{text}/i", timeout=timeout)
+                        self.logger.info(f"Clicked element with text '{text}' using case-insensitive match")
+                        clicked = True
                 except Exception as e:
                     last_error = e
                 
@@ -238,14 +318,26 @@ class WebAgent:
                 
         elif selector:
             try:
-                await self.page.click(selector, timeout=timeout)
-                self.logger.info(f"Clicked selector: {selector}")
+                if wait_for_navigation:
+                    url_before = self.page.url
+                    async with self.page.expect_navigation(timeout=timeout) as navigation_info:
+                        await self.page.click(selector, timeout=timeout)
+                    await navigation_info.value
+                    url_after = self.page.url
+                    self.logger.info(f"Clicked selector: {selector}")
+                    self.logger.info(f"Navigation occurred: {url_before} -> {url_after}")
+                    return True
+                else:
+                    await self.page.click(selector, timeout=timeout)
+                    self.logger.info(f"Clicked selector: {selector}")
             except Exception as e:
                 error_msg = f"Could not click selector '{selector}': {e}"
                 self.logger.error(error_msg)
                 raise ValueError(error_msg)
         else:
             raise ValueError("Either text or selector must be provided")
+        
+        return False
     
     async def fill(self, field: str, value: str) -> None:
         """
@@ -335,25 +427,32 @@ class WebAgent:
         
         return self.page.url
     
-    async def perform(self, action: Dict[str, Any]) -> None:
+    async def perform(self, action: Dict[str, Any]) -> bool:
         """
         Perform an action based on action dictionary.
         
         Args:
             action: Action dictionary with 'action' and 'target' keys
+        
+        Returns:
+            True if navigation occurred (for click actions), False otherwise
         """
         action_type = action.get("action")
         target = action.get("target")
         value = action.get("value")
         
         if action_type == "click":
-            await self.click(text=target)
+            # Automatically wait for navigation on submit/login buttons
+            return await self.click(text=target, wait_for_navigation=True)
         elif action_type == "fill":
             await self.fill(field=target, value=value)
+            return False
         elif action_type == "navigate":
             await self.navigate(target)
+            return True
         elif action_type == "wait":
             await asyncio.sleep(value or 1)
+            return False
         else:
             raise ValueError(f"Unknown action type: {action_type}")
 

@@ -7,6 +7,8 @@ from agents.web_agent import WebAgent
 from agents.vision_agent import VisionAgent
 from agents.reasoning_agent import ReasoningAgent
 from utils.state_manager import StateManager
+from utils.run_recorder import RunRecorder
+from utils.pdf_report import generate_run_pdf
 from utils.logger import setup_logger
 
 
@@ -75,6 +77,7 @@ class Orchestrator:
         done = False
         error = None
         oauth_detected = False
+        recorder = RunRecorder(self.task_name)
         
         try:
             while step < self.max_steps and not done:
@@ -144,6 +147,26 @@ class Orchestrator:
                     reasoning_data=reasoning_data,
                     dom_data=dom_data
                 )
+
+                # Lightweight step log
+                try:
+                    buttons = [
+                        b if isinstance(b, str) else b.get("text", "")
+                        for b in vision_data.get("buttons", [])
+                    ]
+                    recorder.record_step(
+                        step=step,
+                        url=current_url,
+                        image_path=img_path,
+                        action=action,
+                        target=reasoning_data.get("target"),
+                        buttons=buttons,
+                        status="pending",
+                        reasoning=reasoning_data.get("reasoning"),
+                    )
+                except Exception:
+                    # Do not fail run due to logging
+                    pass
                 
                 if done:
                     self.logger.info("Task completed!")
@@ -172,11 +195,47 @@ class Orchestrator:
                                 reasoning_data["value"] = self.credentials["password"]
                                 self.logger.info("Auto-filling password from credentials")
                     
-                    await self.web_agent.perform(reasoning_data)
+                    navigation_occurred = await self.web_agent.perform(reasoning_data)
+                    
+                    # Wait a bit for page to settle after navigation
+                    if navigation_occurred:
+                        await asyncio.sleep(2)  # Wait longer after navigation
+                        # Update current URL after navigation
+                        current_url = await self.web_agent.get_current_url()
+                    
+                    # Mark as success in lightweight log
+                    try:
+                        recorder.record_step(
+                            step=step,
+                            url=current_url,
+                            image_path=img_path,
+                            action=action,
+                            target=reasoning_data.get("target"),
+                            buttons=buttons if 'buttons' in locals() else [],
+                            status="success" if navigation_occurred or action_type != "click" else "pending",
+                            reasoning=reasoning_data.get("reasoning"),
+                        )
+                    except Exception:
+                        pass
+
                     await asyncio.sleep(1)  # Brief pause between actions
                 except Exception as e:
                     self.logger.error(f"Error performing action: {e}")
                     error = str(e)
+                    # Mark as failure in lightweight log
+                    try:
+                        recorder.record_step(
+                            step=step,
+                            url=current_url,
+                            image_path=img_path,
+                            action=action,
+                            target=reasoning_data.get("target"),
+                            buttons=buttons if 'buttons' in locals() else [],
+                            status="failure",
+                            reasoning=reasoning_data.get("reasoning"),
+                        )
+                    except Exception:
+                        pass
                     break
                 
                 step += 1
@@ -191,7 +250,18 @@ class Orchestrator:
                 "error": error,
                 "final_state": self.state_manager.get_last_step()
             }
-            
+            # Write concise summary
+            try:
+                recorder.write_summary(completed=done, error=error)
+            except Exception:
+                pass
+
+            # Generate PDF report
+            try:
+                generate_run_pdf(self.task_name)
+            except Exception:
+                pass
+
             return result
             
         except Exception as e:

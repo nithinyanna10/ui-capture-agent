@@ -98,14 +98,20 @@ class VisionAgent:
         b64_image = self._encode_image(image_path)
         
         # Create prompt for structured UI description
-        prompt = """Analyze this web UI screenshot and describe it precisely in JSON format. Include:
+        prompt = """Analyze this web UI screenshot and describe it precisely in JSON format. 
+
+CRITICAL: You MUST scan ALL areas of the page - header, left sidebar, right sidebar, main content area, footer, and any navigation bars. Do not miss buttons or elements in sidebars or corners.
+
+Include:
 - title: Page title or main heading
-- buttons: List of all visible buttons with their text
+- buttons: List of ALL visible buttons with their text/labels from EVERY area (header, sidebars, main content, footer). Include buttons with icons, colored buttons (green, blue, etc.), and any clickable elements that look like buttons. Look for words like "New", "Create", "Add", "Sign in", etc. Even if a button is just an icon or colored differently, include it.
 - fields: List of all form fields (inputs, textareas) with labels/placeholders
 - links: List of clickable links
 - text_content: Main text content visible on the page
-- layout: Description of the page layout
-- interactive_elements: List of all interactive elements
+- layout: Description of the page layout including sidebar positions
+- interactive_elements: List of all interactive elements from all areas
+
+IMPORTANT: Check left sidebar, right sidebar, top header, and footer for buttons. Many important actions are in sidebars or navigation bars, not just the center. Look carefully for colored buttons, icon buttons, and buttons with minimal text.
 
 Return ONLY valid JSON, no additional text."""
 
