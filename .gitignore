@@ -13,9 +13,7 @@ ENV/
 logs/
 *.log
 
-# Data
-data/**/*.png
-data/**/metadata.json
+
 
 # IDE
 .vscode/
