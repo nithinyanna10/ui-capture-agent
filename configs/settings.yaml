@@ -23,6 +23,13 @@ web:
     height: 1080
   timeout: 60000
   screenshot_path: "data"
+  session_persistence:
+    enabled: true  # Save browser session (cookies, localStorage) for next run
+    storage_path: "data/browser_session"  # Where to save session state
+    pause_at_start: false  # Pause at start to allow manual login
+    pause_duration: 60  # Seconds to wait if pause_at_start is true
+    use_existing_browser: true  # Use your existing Chrome profile (logged-in sessions)
+    user_data_dir: "~/Library/Application Support/Google/Chrome/Default"  # macOS Chrome path (change for Windows/Linux)
 
 # Task Defaults
 task:

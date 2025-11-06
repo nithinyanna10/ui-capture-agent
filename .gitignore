@@ -26,3 +26,6 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Browser session (contains cookies/auth data)
+data/browser_session/state.json
+

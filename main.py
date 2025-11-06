@@ -83,7 +83,8 @@ async def main():
         headless=web_config.get("headless", False),
         viewport=web_config.get("viewport"),
         timeout=web_config.get("timeout", 30000),
-        screenshot_path=web_config.get("screenshot_path", "data")
+        screenshot_path=web_config.get("screenshot_path", "data"),
+        session_persistence=web_config.get("session_persistence", {})
     )
     
     vision_agent = VisionAgent(

@@ -115,6 +115,7 @@ IMPORTANT RULES:
 4. If no fields are visible, you must click a button to navigate to the form first
 5. Follow logical flow: navigate → fill forms → submit
 6. AVOID clicking OAuth buttons like "Continue with Google", "Sign in with GitHub", etc. - these cause redirects and break automation. Prefer email/password signup instead.
+7. The order of filling is important. You must fill the username field first, then the password field, then click the sign in button.
 
 Current UI State:
 - Title: {vision_state.get('title', 'Unknown')}

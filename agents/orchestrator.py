@@ -80,12 +80,26 @@ class Orchestrator:
         recorder = RunRecorder(self.task_name)
         
         try:
+            # Track if we already captured a screenshot in this iteration (for non-navigation clicks)
+            screenshot_already_captured = False
+            
             while step < self.max_steps and not done:
+                self.logger.info(f"\n{'='*60}")
                 self.logger.info(f"Step {step + 1}/{self.max_steps}")
+                self.logger.info(f"{'='*60}")
                 
-                # Capture screenshot
-                screenshot_path = f"data/{self.task_name}/step_{step:02d}.png"
-                img_path = await self.web_agent.capture_screenshot(screenshot_path)
+                # Capture screenshot at the start of each step (unless we just captured one after a click)
+                if not screenshot_already_captured:
+                    screenshot_path = f"data/{self.task_name}/step_{step:02d}.png"
+                    self.logger.info(f"Capturing screenshot: {screenshot_path}")
+                    img_path = await self.web_agent.capture_screenshot(screenshot_path)
+                    self.logger.info(f"Screenshot captured: {img_path}")
+                else:
+                    # Use the screenshot we just captured after the click
+                    screenshot_path = f"data/{self.task_name}/step_{step:02d}.png"
+                    img_path = screenshot_path
+                    screenshot_already_captured = False  # Reset flag
+                    self.logger.info(f"Using screenshot captured after action: {img_path}")
                 
                 # Get current URL and DOM
                 current_url = await self.web_agent.get_current_url()
@@ -195,13 +209,127 @@ class Orchestrator:
                                 reasoning_data["value"] = self.credentials["password"]
                                 self.logger.info("Auto-filling password from credentials")
                     
-                    navigation_occurred = await self.web_agent.perform(reasoning_data)
+                    self.logger.info(f"Performing action: {action} -> {reasoning_data.get('target')}")
                     
-                    # Wait a bit for page to settle after navigation
+                    # Store URL before action to detect changes
+                    url_before_action = await self.web_agent.get_current_url()
+                    
+                    try:
+                        navigation_occurred = await self.web_agent.perform(reasoning_data)
+                        self.logger.info(f"✅ Action executed successfully. Navigation occurred: {navigation_occurred}")
+                    except Exception as click_error:
+                        self.logger.error(f"❌ Action failed: {click_error}")
+                        # Mark as failure
+                        try:
+                            recorder.record_step(
+                                step=step,
+                                url=url_before_action,
+                                image_path=img_path,
+                                action=action,
+                                target=reasoning_data.get("target"),
+                                buttons=buttons if 'buttons' in locals() else [],
+                                status="failure",
+                                reasoning=f"Action failed: {str(click_error)}",
+                            )
+                        except Exception:
+                            pass
+                        raise  # Re-raise to be caught by outer exception handler
+                    
+                    # Wait for UI to update after any action
                     if navigation_occurred:
-                        await asyncio.sleep(2)  # Wait longer after navigation
+                        # Wait longer after navigation (page change)
+                        self.logger.info("Waiting for page to load after navigation...")
+                        await asyncio.sleep(2)
                         # Update current URL after navigation
                         current_url = await self.web_agent.get_current_url()
+                        self.logger.info(f"New URL after navigation: {current_url}")
+                    else:
+                        # For clicks that don't cause navigation (modals, dropdowns, etc.)
+                        # ALWAYS take a screenshot after non-navigation clicks to capture UI changes
+                        if action_type == "click":
+                            self.logger.info("Click did not cause navigation. Waiting for UI to update (modal, form, etc.)...")
+                            
+                            # Wait a bit for UI to update
+                            await asyncio.sleep(2)  # Base wait for UI to update
+                            
+                            # Try to detect if a modal or form appeared (but don't fail if we can't detect it)
+                            ui_changed = False
+                            try:
+                                # Check for common modal/form indicators
+                                modal_selectors = [
+                                    '[role="dialog"]',
+                                    '.modal',
+                                    '[class*="modal"]',
+                                    '[class*="dialog"]',
+                                    'form',
+                                    '[role="form"]',
+                                    '[class*="overlay"]',
+                                    '[class*="popup"]'
+                                ]
+                                for selector in modal_selectors:
+                                    try:
+                                        await self.web_agent.page.wait_for_selector(
+                                            selector,
+                                            timeout=2000,
+                                            state="visible"
+                                        )
+                                        self.logger.info(f"✅ Detected UI change after click: {selector} appeared")
+                                        ui_changed = True
+                                        await asyncio.sleep(1)  # Extra wait for modal to fully render
+                                        break
+                                    except Exception:
+                                        continue
+                            except Exception as e:
+                                self.logger.debug(f"Could not detect UI change: {e}")
+                            
+                            if not ui_changed:
+                                self.logger.info("⚠️  No modal/form detected, but taking screenshot anyway to capture any UI changes...")
+                            
+                            # IMPORTANT: ALWAYS take a new screenshot after non-navigation clicks
+                            # This ensures we capture modals, forms, and other UI changes
+                            step += 1  # Increment step first to get the next screenshot number
+                            new_screenshot_path = f"data/{self.task_name}/step_{step:02d}.png"
+                            self.logger.info(f"📸 Capturing updated UI screenshot: {new_screenshot_path}")
+                            
+                            try:
+                                new_img_path = await self.web_agent.capture_screenshot(new_screenshot_path)
+                                self.logger.info(f"✅ Updated screenshot captured: {new_img_path}")
+                                
+                                # Mark that we already captured a screenshot for the next iteration
+                                screenshot_already_captured = True
+                                
+                                # Update current URL (might have changed even if navigation_occurred was False)
+                                current_url = await self.web_agent.get_current_url()
+                                
+                                # Log this step with the updated UI
+                                try:
+                                    # Quick vision analysis for logging
+                                    updated_vision_data = self.vision_agent.describe_ui(new_img_path)
+                                    updated_buttons = [
+                                        b if isinstance(b, str) else b.get("text", "")
+                                        for b in updated_vision_data.get("buttons", [])
+                                    ]
+                                    recorder.record_step(
+                                        step=step,
+                                        url=current_url,
+                                        image_path=new_img_path,
+                                        action="ui_updated",
+                                        target=f"After clicking: {reasoning_data.get('target')}",
+                                        buttons=updated_buttons,
+                                        status="success",
+                                        reasoning=f"UI updated after clicking {reasoning_data.get('target')}. New state captured.",
+                                    )
+                                    self.logger.info(f"✅ Step {step} logged with updated UI state")
+                                except Exception as log_error:
+                                    self.logger.warning(f"Could not log updated step: {log_error}")
+                                
+                                # Continue to next iteration - it will use the screenshot we just captured
+                                await asyncio.sleep(0.5)
+                                self.logger.info(f"🔄 Step {step} screenshot captured. Loop will continue to analyze this state...")
+                                continue  # Skip the normal increment at the end since we already incremented
+                            except Exception as screenshot_error:
+                                self.logger.error(f"❌ Failed to capture screenshot after click: {screenshot_error}")
+                                # Don't break, just continue normally
                     
                     # Mark as success in lightweight log
                     try:
@@ -218,7 +346,8 @@ class Orchestrator:
                     except Exception:
                         pass
 
-                    await asyncio.sleep(1)  # Brief pause between actions
+                    await asyncio.sleep(0.5)  # Brief pause before next iteration
+                    self.logger.info(f"Step {step + 1} completed. Moving to next step...")
                 except Exception as e:
                     self.logger.error(f"Error performing action: {e}")
                     error = str(e)
@@ -239,6 +368,7 @@ class Orchestrator:
                     break
                 
                 step += 1
+                self.logger.info(f"Incrementing step to {step + 1}. Loop will continue...")
             
             if step >= self.max_steps:
                 self.logger.warning(f"Reached maximum steps ({self.max_steps})")
