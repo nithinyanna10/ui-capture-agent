@@ -29,7 +29,7 @@ Ensure Ollama is running and you have the required models:
 ollama pull qwen3-vl:4b
 
 # Pull reasoning model
-ollama pull deepseek-v3.1:671b-cloud
+ollama pull gpt-oss120B
 ```
 
 ### 3. Configure Settings
